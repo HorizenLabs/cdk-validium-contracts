@@ -65,11 +65,12 @@ async function main() {
     } = deployParameters;
 
     /*
-     *Deployment MATIC
+     *Deployment RNT
      */
-    const maticTokenName = 'Matic Token';
-    const maticTokenSymbol = 'MATIC';
-    const maticTokenInitialBalance = ethers.utils.parseEther('20000000');
+    console.log("Deploy RNT contract...")
+    const maticTokenName = 'Rollup Native Token';
+    const maticTokenSymbol = 'RNT';
+    const maticTokenInitialBalance = ethers.utils.parseEther('2000000000000000000000000');
 
     const maticTokenFactory = await ethers.getContractFactory('ERC20PermitMock', deployer);
     const maticTokenContract = await maticTokenFactory.deploy(
@@ -81,7 +82,7 @@ async function main() {
     await maticTokenContract.deployed();
 
     console.log('#######################\n');
-    console.log('Matic deployed to:', maticTokenContract.address);
+    console.log('RNT deployed to:', maticTokenContract.address);
 
     // fund sequencer account with tokens and ether if it have less than 0.1 ether.
     const balanceEther = await ethers.provider.getBalance(trustedSequencer);

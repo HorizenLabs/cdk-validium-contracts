@@ -2,13 +2,13 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
-import "./interfaces/IVerifierRollup.sol";
 import "./interfaces/IPolygonZkEVMGlobalExitRoot.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "./interfaces/IPolygonZkEVMBridge.sol";
 import "./lib/EmergencyManager.sol";
 import "./interfaces/ICDKValidiumErrors.sol";
 import "./interfaces/ICDKDataCommittee.sol";
+import "./interfaces/INewHorizenProofVerifier.sol";
 
 /**
  * Contract responsible for managing the states and the updates of L2 network.
@@ -19,9 +19,9 @@ import "./interfaces/ICDKDataCommittee.sol";
  * To enter and exit of the L2 network will be used a PolygonZkEVMBridge smart contract that will be deployed in both networks.
  */
 contract CDKValidium is
-    OwnableUpgradeable,
-    EmergencyManager,
-    ICDKValidiumErrors
+OwnableUpgradeable,
+EmergencyManager,
+ICDKValidiumErrors
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
@@ -101,9 +101,16 @@ contract CDKValidium is
         uint64 trustedAggregatorTimeout;
     }
 
+    struct NewHorizenVerificationRequest {
+        uint256 attestationId;
+        bytes32[] merklePath;
+        uint256 leafCount;
+        uint256 index;
+    }
+
     // Modulus zkSNARK
     uint256 internal constant _RFIELD =
-        21888242871839275222246405745257275088548364400416034343698204186575808495617;
+    21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
     // Max transactions bytes that can be added in a single batch
     // Max keccaks circuit = (2**23 / 155286) * 44 = 2376
@@ -149,7 +156,7 @@ contract CDKValidium is
     IERC20Upgradeable public immutable matic;
 
     // Rollup verifier interface
-    IVerifierRollup public immutable rollupVerifier;
+    INewHorizenProofVerifier public immutable rollupVerifier;
 
     // Global Exit Root interface
     IPolygonZkEVMGlobalExitRoot public immutable globalExitRootManager;
@@ -245,6 +252,9 @@ contract CDKValidium is
 
     // Indicates if forced batches are disallowed
     bool public isForcedBatchDisallowed;
+
+    // Proving system identifier
+    string internal constant fflonk = "fflonk-";
 
     /**
      * @dev Emitted when the trusted sequencer sends a new batch of transactions
@@ -383,7 +393,7 @@ contract CDKValidium is
     constructor(
         IPolygonZkEVMGlobalExitRoot _globalExitRootManager,
         IERC20Upgradeable _matic,
-        IVerifierRollup _rollupVerifier,
+        INewHorizenProofVerifier _rollupVerifier,
         IPolygonZkEVMBridge _bridgeAddress,
         ICDKDataCommittee _dataCommitteeAddress,
         uint64 _chainID,
@@ -393,7 +403,7 @@ contract CDKValidium is
         matic = _matic;
         rollupVerifier = _rollupVerifier;
         bridgeAddress = _bridgeAddress;
-        dataCommitteeAddress = _dataCommitteeAddress;   
+        dataCommitteeAddress = _dataCommitteeAddress;
         chainID = _chainID;
         forkID = _forkID;
     }
@@ -585,7 +595,7 @@ contract CDKValidium is
 
         // Validate that the data committee has signed the accInputHash for this sequence
         dataCommitteeAddress.verifySignatures(currentAccInputHash, signaturesAndAddrs);
-        
+
         // Update currentBatchSequenced
         currentBatchSequenced += uint64(batchesNum);
 
@@ -634,7 +644,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function verifyBatches(
         uint64 pendingStateNum,
@@ -642,13 +652,13 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
+        NewHorizenVerificationRequest calldata verificationRequest
     ) external ifNotEmergencyState {
         // Check if the trusted aggregator timeout expired,
         // Note that the sequencedBatches struct must exists for this finalNewBatch, if not newAccInputHash will be 0
         if (
             sequencedBatches[finalNewBatch].sequencedTimestamp +
-                trustedAggregatorTimeout >
+            trustedAggregatorTimeout >
             block.timestamp
         ) {
             revert TrustedAggregatorTimeoutNotExpired();
@@ -664,7 +674,7 @@ contract CDKValidium is
             finalNewBatch,
             newLocalExitRoot,
             newStateRoot,
-            proof
+            verificationRequest
         );
 
         // Update batch fees
@@ -707,7 +717,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function verifyBatchesTrustedAggregator(
         uint64 pendingStateNum,
@@ -715,7 +725,7 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
+        NewHorizenVerificationRequest calldata verificationRequest
     ) external onlyTrustedAggregator {
         _verifyAndRewardBatches(
             pendingStateNum,
@@ -723,7 +733,7 @@ contract CDKValidium is
             finalNewBatch,
             newLocalExitRoot,
             newStateRoot,
-            proof
+            verificationRequest
         );
 
         // Consolidate state
@@ -753,7 +763,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function _verifyAndRewardBatches(
         uint64 pendingStateNum,
@@ -761,7 +771,7 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
+        NewHorizenVerificationRequest calldata verificationRequest
     ) internal virtual {
         bytes32 oldStateRoot;
         uint64 currentLastVerifiedBatch = getLastVerifiedBatch();
@@ -776,8 +786,8 @@ contract CDKValidium is
 
             // Check choosen pending state
             PendingState storage currentPendingState = pendingStateTransitions[
-                pendingStateNum
-            ];
+                        pendingStateNum
+                ];
 
             // Get oldStateRoot from pending batch
             oldStateRoot = currentPendingState.stateRoot;
@@ -814,10 +824,19 @@ contract CDKValidium is
             newStateRoot
         );
 
-        // Calulate the snark input
+        // Calculate the snark input
         uint256 inputSnark = uint256(sha256(snarkHashBytes)) % _RFIELD;
+
+        bytes32 leaf = keccak256(abi.encodePacked(fflonk, inputSnark));
+
         // Verify proof
-        if (!rollupVerifier.verifyProof(proof, [inputSnark])) {
+        if (!rollupVerifier.verifyProofAttestation(
+            verificationRequest.attestationId,
+            leaf,
+            verificationRequest.merklePath,
+            verificationRequest.leafCount,
+            verificationRequest.index)
+        ) {
             revert InvalidProof();
         }
 
@@ -825,7 +844,7 @@ contract CDKValidium is
         matic.safeTransfer(
             msg.sender,
             calculateRewardPerBatch() *
-                (finalNewBatch - currentLastVerifiedBatch)
+            (finalNewBatch - currentLastVerifiedBatch)
         );
     }
 
@@ -890,8 +909,8 @@ contract CDKValidium is
         }
 
         PendingState storage currentPendingState = pendingStateTransitions[
-            pendingStateNum
-        ];
+                    pendingStateNum
+            ];
 
         // Update state
         uint64 newLastVerifiedBatch = currentPendingState.lastVerifiedBatch;
@@ -923,15 +942,15 @@ contract CDKValidium is
 
         uint256 totalBatchesAboveTarget;
         uint256 newBatchesVerified = newLastVerifiedBatch -
-            currentLastVerifiedBatch;
+                    currentLastVerifiedBatch;
 
         uint256 targetTimestamp = block.timestamp - verifyBatchTimeTarget;
 
         while (currentBatch != currentLastVerifiedBatch) {
             // Load sequenced batchdata
             SequencedBatchData
-                storage currentSequencedBatchData = sequencedBatches[
-                    currentBatch
+            storage currentSequencedBatchData = sequencedBatches[
+                        currentBatch
                 ];
 
             // Check if timestamp is below the verifyBatchTimeTarget
@@ -951,7 +970,7 @@ contract CDKValidium is
         }
 
         uint256 totalBatchesBelowTarget = newBatchesVerified -
-            totalBatchesAboveTarget;
+                    totalBatchesAboveTarget;
 
         // _MAX_BATCH_FEE --> (< 70 bits)
         // multiplierBatchFee --> (< 10 bits)
@@ -965,7 +984,7 @@ contract CDKValidium is
             if (totalBatchesBelowTarget < totalBatchesAboveTarget) {
                 // There are more batches above target, fee is multiplied
                 uint256 diffBatches = totalBatchesAboveTarget -
-                    totalBatchesBelowTarget;
+                            totalBatchesBelowTarget;
 
                 diffBatches = diffBatches > _MAX_BATCH_MULTIPLIER
                     ? _MAX_BATCH_MULTIPLIER
@@ -978,7 +997,7 @@ contract CDKValidium is
             } else {
                 // There are more batches below target, fee is divided
                 uint256 diffBatches = totalBatchesBelowTarget -
-                    totalBatchesAboveTarget;
+                            totalBatchesAboveTarget;
 
                 diffBatches = diffBatches > _MAX_BATCH_MULTIPLIER
                     ? _MAX_BATCH_MULTIPLIER
@@ -1346,7 +1365,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function overridePendingState(
         uint64 initPendingStateNum,
@@ -1355,7 +1374,7 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
+        NewHorizenVerificationRequest calldata verificationRequest
     ) external onlyTrustedAggregator {
         _proveDistinctPendingState(
             initPendingStateNum,
@@ -1364,7 +1383,7 @@ contract CDKValidium is
             finalNewBatch,
             newLocalExitRoot,
             newStateRoot,
-            proof
+            verificationRequest
         );
 
         // Consolidate state state
@@ -1394,7 +1413,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function proveNonDeterministicPendingState(
         uint64 initPendingStateNum,
@@ -1403,7 +1422,7 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
+        NewHorizenVerificationRequest calldata verificationRequest
     ) external ifNotEmergencyState {
         _proveDistinctPendingState(
             initPendingStateNum,
@@ -1412,7 +1431,7 @@ contract CDKValidium is
             finalNewBatch,
             newLocalExitRoot,
             newStateRoot,
-            proof
+            verificationRequest
         );
 
         emit ProveNonDeterministicPendingState(
@@ -1432,7 +1451,7 @@ contract CDKValidium is
      * @param finalNewBatch Last batch aggregator intends to verify
      * @param newLocalExitRoot  New local exit root once the batch is processed
      * @param newStateRoot New State root once the batch is processed
-     * @param proof fflonk proof
+     * @param verificationRequest Struct which holds the necessary data to verify the batches
      */
     function _proveDistinctPendingState(
         uint64 initPendingStateNum,
@@ -1441,8 +1460,8 @@ contract CDKValidium is
         uint64 finalNewBatch,
         bytes32 newLocalExitRoot,
         bytes32 newStateRoot,
-        bytes32[24] calldata proof
-    ) internal view virtual {
+        NewHorizenVerificationRequest calldata verificationRequest
+    ) internal virtual {
         bytes32 oldStateRoot;
 
         // Use pending state if specified, otherwise use consolidated state
@@ -1453,10 +1472,10 @@ contract CDKValidium is
                 revert PendingStateDoesNotExist();
             }
 
-            // Check choosen pending state
+            // Check chosen pending state
             PendingState storage initPendingState = pendingStateTransitions[
-                initPendingStateNum
-            ];
+                        initPendingStateNum
+                ];
 
             // Get oldStateRoot from init pending state
             oldStateRoot = initPendingState.stateRoot;
@@ -1507,11 +1526,18 @@ contract CDKValidium is
             newStateRoot
         );
 
-        // Calulate the snark input
+        // Calculate the snark input
         uint256 inputSnark = uint256(sha256(snarkHashBytes)) % _RFIELD;
+        bytes32 leaf = keccak256(abi.encodePacked(fflonk, inputSnark));
 
         // Verify proof
-        if (!rollupVerifier.verifyProof(proof, [inputSnark])) {
+        if (!rollupVerifier.verifyProofAttestation(
+            verificationRequest.attestationId,
+            leaf,
+            verificationRequest.merklePath,
+            verificationRequest.leafCount,
+            verificationRequest.index)
+        ) {
             revert InvalidProof();
         }
 
@@ -1549,7 +1575,7 @@ contract CDKValidium is
             // Check that has been passed _HALT_AGGREGATION_TIMEOUT since it was sequenced
             if (
                 sequencedBatches[sequencedBatchNum].sequencedTimestamp +
-                    _HALT_AGGREGATION_TIMEOUT >
+                _HALT_AGGREGATION_TIMEOUT >
                 block.timestamp
             ) {
                 revert HaltTimeoutNotExpired();
@@ -1610,7 +1636,7 @@ contract CDKValidium is
         uint64 pendingStateNum
     ) public view returns (bool) {
         return (pendingStateTransitions[pendingStateNum].timestamp +
-            pendingStateTimeout <=
+        pendingStateTimeout <=
             block.timestamp);
     }
 
@@ -1624,7 +1650,7 @@ contract CDKValidium is
         // Total Batches to be verified = Total Sequenced Batches - verified Batches
         uint256 totalBatchesToVerify = ((lastForceBatch -
             lastForceBatchSequenced) + lastBatchSequenced) -
-            getLastVerifiedBatch();
+                        getLastVerifiedBatch();
 
         if (totalBatchesToVerify == 0) return 0;
         return currentBalance / totalBatchesToVerify;
@@ -1664,17 +1690,17 @@ contract CDKValidium is
 
         return
             abi.encodePacked(
-                msg.sender,
-                oldStateRoot,
-                oldAccInputHash,
-                initNumBatch,
-                chainID,
-                forkID,
-                newStateRoot,
-                newAccInputHash,
-                newLocalExitRoot,
-                finalNewBatch
-            );
+            msg.sender,
+            oldStateRoot,
+            oldAccInputHash,
+            initNumBatch,
+            chainID,
+            forkID,
+            newStateRoot,
+            newAccInputHash,
+            newLocalExitRoot,
+            finalNewBatch
+        );
     }
 
     function checkStateRootInsidePrime(
