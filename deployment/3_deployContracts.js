@@ -9,6 +9,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const { create2Deployment } = require('./helpers/deployment-helpers');
 
 const pathOutputJson = path.join(__dirname, './deploy_output.json');
+const pathNodeGenesisJson = path.join(__dirname, './test.genesis.config.json');
 const pathOngoingDeploymentJson = path.join(__dirname, './deploy_ongoing.json');
 
 const deployParameters = require('./deploy_parameters.json');
@@ -84,7 +85,10 @@ async function main() {
         maticTokenAddress,
         setupEmptyCommittee,
         committeeTimelock,
+        newHorizenAttestationAddress
     } = deployParameters;
+
+    var { newHorizenContractAddress } = deployParameters;
 
     // Load provider
     let currentProvider = ethers.provider;
@@ -134,11 +138,13 @@ async function main() {
     }
     expect(deployer.address).to.be.equal(await cdkValidiumDeployerContract.owner());
 
+    // The verifier was substituted by the NewHorizenProofVerifier contract
+    /*
     let verifierContract;
     if (!ongoingDeployment.verifierContract) {
         if (realVerifier === true) {
-            const VerifierRollup = await ethers.getContractFactory('FflonkVerifier', deployer);
-            verifierContract = await VerifierRollup.deploy();
+            const VerifierRollup = await ethers.getContractFactory('NewHorizenProofVerifier', deployer);
+            verifierContract = await VerifierRollup.deploy(trustedAggregator);
             await verifierContract.deployed();
         } else {
             const VerifierRollupHelperFactory = await ethers.getContractFactory('VerifierRollupHelperMock', deployer);
@@ -155,7 +161,7 @@ async function main() {
         console.log('Verifier already deployed on: ', ongoingDeployment.verifierContract);
         const VerifierRollupFactory = await ethers.getContractFactory('FflonkVerifier', deployer);
         verifierContract = VerifierRollupFactory.attach(ongoingDeployment.verifierContract);
-    }
+    }*/
 
     /*
      * Deploy Bridge
@@ -221,7 +227,7 @@ async function main() {
      * Nonce globalExitRoot: currentNonce + 1 (deploy bridge proxy) + 1(impl globalExitRoot
      * + 1 (deploy data comittee proxy) + 1(impl data committee) + setupCommitte? = +4 or +5
      */
-    const nonceDelta = 4 + (setupEmptyCommittee ? 1 : 0);
+    const nonceDelta = 5
     const nonceProxyGlobalExitRoot = Number((await ethers.provider.getTransactionCount(deployer.address)))
         + nonceDelta;
     // nonceProxyCDKValidium :Nonce globalExitRoot + 1 (proxy globalExitRoot) + 1 (impl cdk) = +2
@@ -242,7 +248,7 @@ async function main() {
 
         // Contracts are not deployed, normal deployment
         precalculateGLobalExitRootAddress = ethers.utils.getContractAddress({ from: deployer.address, nonce: nonceProxyGlobalExitRoot });
-        precalculateCDKValidiumAddress = ethers.utils.getContractAddress({ from: deployer.address, nonce: nonceProxyCDKValidium });
+        precalculateCDKValidiumAddress = ethers.utils.getContractAddress({ from: deployer.address, nonce: nonceProxyCDKValidium + (newHorizenContractAddress ? 0 : 1)});
     }
 
     const dataCallProxy = PolygonZkEVMBridgeFactory.interface.encodeFunctionData(
@@ -317,6 +323,10 @@ async function main() {
             .to.emit(cdkDataCommitteeContract, 'CommitteeUpdated')
             .withArgs(expectedHash);
         console.log('Empty committee seted up');
+    } else {
+        await cdkDataCommitteeContract.connect(deployer)
+        .setupCommittee(1, ["http://cdk-data-availability:8444"],"0x30C17bB19114E8e8d805F43546EB281eD150D5F5")
+        console.log('Committee seted up with "http://cdk-data-availability:8444"],"0x30C17bB19114E8e8d805F43546EB281eD150D5F5"');
     }
 
     /*
@@ -369,6 +379,20 @@ async function main() {
         expect(precalculateCDKValidiumAddress).to.be.equal(await PolygonZkEVMBridgeContract.rollupAddress());
     }
 
+    //deploy NewHorizenProofVerifier
+    await PolygonZkEVMGlobalExitRoot.deployed()
+    if (!newHorizenContractAddress) {
+        const NewHorizenProofVerifierFactory = await ethers.getContractFactory('NewHorizenProofVerifier', deployer);
+        let newHorizenProofVerifierContract = await NewHorizenProofVerifierFactory.deploy(newHorizenAttestationAddress);
+        console.log('#######################\n');
+        console.log("New Horizen Proof Verifier deployed at: ", newHorizenProofVerifierContract.address)
+        newHorizenContractAddress = newHorizenProofVerifierContract.address
+    } else {
+        console.log('#######################\n');
+        console.log("New Horizen Proof Verifier already deployed at: ", newHorizenContractAddress)     
+    }
+
+
     // deploy CDKValidium
     const genesisRootHex = genesis.root;
 
@@ -378,7 +402,7 @@ async function main() {
     console.log('deployer:', deployer.address);
     console.log('PolygonZkEVMGlobalExitRootAddress:', PolygonZkEVMGlobalExitRoot.address);
     console.log('maticTokenAddress:', maticTokenAddress);
-    console.log('verifierAddress:', verifierContract.address);
+    console.log('verifierAddress (NH contract):', newHorizenContractAddress);
     console.log('PolygonZkEVMBridgeContract:', PolygonZkEVMBridgeContract.address);
 
     console.log('admin:', admin);
@@ -419,7 +443,7 @@ async function main() {
                         constructorArgs: [
                             PolygonZkEVMGlobalExitRoot.address,
                             maticTokenAddress,
-                            verifierContract.address,
+                            newHorizenContractAddress,
                             PolygonZkEVMBridgeContract.address,
                             cdkDataCommitteeContract.address,
                             chainID,
@@ -483,7 +507,7 @@ async function main() {
     console.log('#######################');
     console.log('PolygonZkEVMGlobalExitRootAddress:', await cdkValidiumContract.globalExitRootManager());
     console.log('maticTokenAddress:', await cdkValidiumContract.matic());
-    console.log('verifierAddress:', await cdkValidiumContract.rollupVerifier());
+    console.log('verifierAddress (NH contract):', await cdkValidiumContract.rollupVerifier());
     console.log('PolygonZkEVMBridgeContract:', await cdkValidiumContract.bridgeAddress());
 
     console.log('admin:', await cdkValidiumContract.admin());
@@ -493,7 +517,7 @@ async function main() {
     console.log('trustedAggregator:', await cdkValidiumContract.trustedAggregator());
     console.log('trustedAggregatorTimeout:', await cdkValidiumContract.trustedAggregatorTimeout());
 
-    console.log('genesiRoot:', await cdkValidiumContract.batchNumToStateRoot(0));
+    console.log('genesisRoot:', await cdkValidiumContract.batchNumToStateRoot(0));
     console.log('trustedSequencerURL:', await cdkValidiumContract.trustedSequencerURL());
     console.log('networkName:', await cdkValidiumContract.networkName());
     console.log('owner:', await cdkValidiumContract.owner());
@@ -563,7 +587,7 @@ async function main() {
         polygonZkEVMGlobalExitRootAddress: PolygonZkEVMGlobalExitRoot.address,
         cdkDataCommitteeContract: cdkDataCommitteeContract.address,
         maticTokenAddress,
-        verifierAddress: verifierContract.address,
+        verifierAddress: newHorizenContractAddress,
         cdkValidiumDeployerContract: cdkValidiumDeployerContract.address,
         deployerAddress: deployer.address,
         timelockContractAddress: timelockContract.address,
@@ -584,6 +608,33 @@ async function main() {
 
     // Remove ongoing deployment
     fs.unlinkSync(pathOngoingDeploymentJson);
+
+    // Create new Validium Node genesis configuration
+    const nodeGenesisJson = {
+        l1Config : {
+            chainId: 11155111,
+            polygonZkEVMAddress: cdkValidiumContract.address,
+            maticTokenAddress: maticTokenAddress,
+            polygonZkEVMGlobalExitRootAddress: PolygonZkEVMGlobalExitRoot.address,
+            cdkDataCommitteeContract: cdkDataCommitteeContract.address,
+            newHorizenProofVerifierContract: newHorizenContractAddress
+        },
+        genesisBlockNumber: deploymentBlockNumber,
+        root: genesisRootHex,
+        genesis: genesis.genesis
+    }
+    fs.writeFileSync(pathNodeGenesisJson, JSON.stringify({
+        l1Config: nodeGenesisJson.l1Config,
+        genesisBlockNumber: nodeGenesisJson.genesisBlockNumber,
+        root: genesisRootHex,
+        genesis: genesis.genesis
+    }, null, 1));
+
+    console.log("Bridge Config [GenBlockNumber] = "+deploymentBlockNumber)
+    console.log("Bridge Config [PolygonBridgeAddress] = "+PolygonZkEVMBridgeContract.address)
+    console.log("Bridge Config [PolygonZkEVMGlobalExitRootAddress] = "+PolygonZkEVMGlobalExitRoot.address)
+    console.log("Bridge Config [L2PolygonBridgeAddresses] = "+genesis.genesis[3].address)
+
 }
 
 main().catch((e) => {

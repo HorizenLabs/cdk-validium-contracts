@@ -7,7 +7,8 @@ const gasPriceKeylessDeployment = '100'; // 100 gweis
 
 async function deployCDKValidiumDeployer(deployerAddress, signer) {
     const CDKValidiumDeployerFactory = await ethers.getContractFactory('CDKValidiumDeployer', signer);
-
+    const cdkValidiumContract = await CDKValidiumDeployerFactory.deploy(deployerAddress)
+    await cdkValidiumContract.deployed();
     const deployTxCDKValidiumDeployer = (CDKValidiumDeployerFactory.getDeployTransaction(
         deployerAddress,
     )).data;
@@ -42,6 +43,7 @@ async function deployCDKValidiumDeployer(deployerAddress, signer) {
     }
 
     // Fund keyless deployment
+    /*
     const params = {
         to: resultTransaction.from,
         value: totalEther.toHexString(),
@@ -50,8 +52,9 @@ async function deployCDKValidiumDeployer(deployerAddress, signer) {
 
     // Deploy supernes2Deployer
     await (await signer.provider.sendTransaction(serializedTransaction)).wait();
+    */
 
-    const cdkValidiumDeployerContract = await CDKValidiumDeployerFactory.attach(cdkValidiumDeployerAddress);
+    const cdkValidiumDeployerContract = await CDKValidiumDeployerFactory.attach(cdkValidiumContract.address);
     expect(await cdkValidiumDeployerContract.owner()).to.be.equal(deployerAddress);
     return [cdkValidiumDeployerContract, resultTransaction.from];
 }

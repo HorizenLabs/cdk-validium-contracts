@@ -33,7 +33,7 @@ module.exports = {
           evmVersion: 'paris',
           optimizer: {
             enabled: true,
-            runs: 999999
+            runs: 9999
           }
         }
       },

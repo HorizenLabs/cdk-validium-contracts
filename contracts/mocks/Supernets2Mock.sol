@@ -2,6 +2,7 @@
 pragma solidity 0.8.20;
 
 import "../CDKValidium.sol";
+import "../interfaces/INewHorizenProofVerifier.sol";
 
 /**
  * Contract responsible for managing the state and the updates of the L2 network
@@ -20,21 +21,21 @@ contract CDKValidiumMock is CDKValidium {
     constructor(
         IPolygonZkEVMGlobalExitRoot _globalExitRootManager,
         IERC20Upgradeable _matic,
-        IVerifierRollup _rollupVerifier,
+        INewHorizenProofVerifier _rollupVerifier,
         IPolygonZkEVMBridge _bridgeAddress,
         ICDKDataCommittee _dataComiteeAddress,
         uint64 _chainID,
         uint64 _forkID
     )
-        CDKValidium(
-            _globalExitRootManager,
-            _matic,
-            _rollupVerifier,
-            _bridgeAddress,
-            _dataComiteeAddress,
-            _chainID,
-            _forkID
-        )
+    CDKValidium(
+    _globalExitRootManager,
+    _matic,
+    _rollupVerifier,
+    _bridgeAddress,
+    _dataComiteeAddress,
+    _chainID,
+    _forkID
+    )
     {}
 
     /**
@@ -54,14 +55,14 @@ contract CDKValidiumMock is CDKValidium {
     ) public pure returns (bytes32) {
         return
             keccak256(
-                abi.encodePacked(
-                    currentAccInputHash,
-                    keccak256(transactions),
-                    globalExitRoot,
-                    timestamp,
-                    sequencerAddress
-                )
-            );
+            abi.encodePacked(
+                currentAccInputHash,
+                keccak256(transactions),
+                globalExitRoot,
+                timestamp,
+                sequencerAddress
+            )
+        );
     }
 
     /**
@@ -93,8 +94,8 @@ contract CDKValidiumMock is CDKValidium {
 
             // Check choosen pending state
             PendingState storage currentPendingState = pendingStateTransitions[
-                pendingStateNum
-            ];
+                        pendingStateNum
+                ];
 
             // Get oldStateRoot from pending batch
             oldStateRoot = currentPendingState.stateRoot;
@@ -234,8 +235,8 @@ contract CDKValidiumMock is CDKValidium {
 
             // Check choosen pending state
             PendingState storage currentPendingState = pendingStateTransitions[
-                pendingStateNum
-            ];
+                        pendingStateNum
+                ];
 
             // Get oldStateRoot from pending batch
             oldStateRoot = currentPendingState.stateRoot;
